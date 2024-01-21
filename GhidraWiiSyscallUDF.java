@@ -12,8 +12,12 @@ import java.util.HashMap;
 import java.util.Vector;
 
 import ghidra.app.script.GhidraScript;
+import ghidra.app.cmd.function.ApplyFunctionSignatureCmd;
+import ghidra.app.util.parser.FunctionSignatureParser;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.data.DataTypeConflictHandler;
+import ghidra.program.model.data.FunctionDefinitionDataType;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.program.model.symbol.SymbolIterator;
@@ -22,7 +26,17 @@ import ghidra.program.model.mem.Memory;
 import ghidra.program.model.symbol.SourceType;
 
 public class GhidraWiiSyscallUDF extends GhidraScript {
-    private HashMap<Integer, String> Syscalls = new HashMap<Integer, String>();
+    private HashMap<Integer, FunctionDefinitionDataType> Syscalls = new HashMap<Integer, FunctionDefinitionDataType>();
+
+	protected final FunctionDefinitionDataType parseSignature(String signature) {
+		FunctionSignatureParser parser = new FunctionSignatureParser(currentProgram.getDataTypeManager(), null);
+		try {
+			return parser.parse(null, signature);
+		} catch (Exception e) {
+			println("Failed to parse " + signature);
+		}
+		return null;
+	}
 
     @Override
     protected void run() throws Exception {
@@ -32,7 +46,7 @@ public class GhidraWiiSyscallUDF extends GhidraScript {
         BufferedReader br = new BufferedReader(new FileReader(file));
         for (String line = br.readLine(); line != null; line = br.readLine()) {
         	String[] fields = line.split(":");
-            Syscalls.put(Integer.decode(fields[0]), fields[1]);
+            Syscalls.put(Integer.decode(fields[0]), parseSignature(fields[1]));
         }
     
     	Memory memory = currentProgram.getMemory();
@@ -47,7 +61,7 @@ public class GhidraWiiSyscallUDF extends GhidraScript {
 			Address instrAddr = symbol.getAddress();
 
 			try {
-				int instrVal  = memory.getInt(instrAddr, true);
+				int instrVal = memory.getInt(instrAddr, true);
 				int instr = instrVal & 0xffffe01f;
 				if (instr != 0xe6000010) {
 					continue;
@@ -57,22 +71,27 @@ public class GhidraWiiSyscallUDF extends GhidraScript {
 				if (!Syscalls.containsKey(sysnum)) {
 					continue;
 				}
-				
-				String fnname;
-				String sysname = Syscalls.get(sysnum);
-				fnname = "IOS_" + sysname;
+
+				FunctionDefinitionDataType definition = Syscalls.get(sysnum);
+				if (definition == null) {
+					continue;
+				}
+
+				String fnname = definition.getName();
 
 				println("Renaming: " + symbol.getName() + " -> " + fnname);
 				
-				symbol.setName(fnname, SourceType.DEFAULT);
+				symbol.setName(fnname, SourceType.USER_DEFINED);
 
 				// try to also rename thunks for thumb
 				if (symbol.hasReferences()) {
 					Address fnAddress = symbol.getReferences()[0].getFromAddress();
 					Function fn = currentProgram.getFunctionManager().getFunctionAt(fnAddress);
 					if (fn != null) {
-						println("	Renaming: " + fn.getName() + " -> " + fnname);
-						fn.setName(fnname, SourceType.DEFAULT);
+						println("Applying signature to: " + fn.getName() + " -> " + fnname);
+						ApplyFunctionSignatureCmd cmd = new ApplyFunctionSignatureCmd(fn.getEntryPoint(), definition,
+							SourceType.USER_DEFINED, true, true);
+						runCommand(cmd);
 					}
 				}
 			} catch(Exception e) {}
