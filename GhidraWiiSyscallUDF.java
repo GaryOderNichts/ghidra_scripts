@@ -38,6 +38,12 @@ public class GhidraWiiSyscallUDF extends GhidraScript {
 		return null;
 	}
 
+	protected void applyFunctionDefinition(Function fn, FunctionDefinitionDataType definition) {
+		ApplyFunctionSignatureCmd cmd = new ApplyFunctionSignatureCmd(fn.getEntryPoint(), definition,
+			SourceType.USER_DEFINED, true, true);
+		runCommand(cmd);
+	}
+
     @Override
     protected void run() throws Exception {
         File file = askFile("Please specify a syscall definition file", "Select syscalls definition");
@@ -79,19 +85,22 @@ public class GhidraWiiSyscallUDF extends GhidraScript {
 
 				String fnname = definition.getName();
 
-				println("Renaming: " + symbol.getName() + " -> " + fnname);
-				
-				symbol.setName(fnname, SourceType.USER_DEFINED);
+				Function fn = currentProgram.getFunctionManager().getFunctionAt(instrAddr);
+				if (fn != null) {
+					println("Applying signature to: " + fn.getName() + " -> " + fnname);
+					applyFunctionDefinition(fn, definition);
+				} else {
+					println("Renaming: " + symbol.getName() + " -> " + fnname);
+					symbol.setName(fnname, SourceType.USER_DEFINED);
+				}
 
 				// try to also rename thunks for thumb
 				if (symbol.hasReferences()) {
 					Address fnAddress = symbol.getReferences()[0].getFromAddress();
-					Function fn = currentProgram.getFunctionManager().getFunctionAt(fnAddress);
+					fn = currentProgram.getFunctionManager().getFunctionAt(fnAddress);
 					if (fn != null) {
 						println("Applying signature to: " + fn.getName() + " -> " + fnname);
-						ApplyFunctionSignatureCmd cmd = new ApplyFunctionSignatureCmd(fn.getEntryPoint(), definition,
-							SourceType.USER_DEFINED, true, true);
-						runCommand(cmd);
+						applyFunctionDefinition(fn, definition);
 					}
 				}
 			} catch(Exception e) {}
